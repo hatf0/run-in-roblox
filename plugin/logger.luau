@@ -12,6 +12,7 @@ local module = {
   heartbeatConnection = nil,
   logConnection = nil,
   errorConnection = nil,
+  tryFlush = true,
 }
 
 local logTypeToLevel = {
@@ -30,7 +31,7 @@ function module:flushMessages()
 	local encoded = HttpService:JSONEncode(self.queuedMessages)
 	self.queuedMessages = {}
   local backoff = 1
-  while true do
+  while self.tryFlush do
     local success, e = pcall(function()
       return HttpService:PostAsync(self.serverUrl .. "/messages", encoded)
     end)

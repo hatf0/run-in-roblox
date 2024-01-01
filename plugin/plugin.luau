@@ -121,6 +121,9 @@ while true do
   if not success then
     warn('backend server is no longer alive - exiting main loop')
     warn(`got error {e}`)
+    -- discard all logging messages, we can't reach the coordinator
+    Logger.queuedMessages = {}
+    Logger.tryFlush = false
     wait(2)
     cleanup()
     return
