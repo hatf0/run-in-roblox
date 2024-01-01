@@ -1,19 +1,24 @@
-use std::{
-    sync::{mpsc, Arc},
-    thread,
-    time::Duration,
+use anyhow::Result;
+use async_channel::RecvError;
+use async_trait::async_trait;
+use axum::{
+    body::Body,
+    extract::{Json, State, Query},
+    routing::{get, post},
+    Router, http::StatusCode,
 };
-
-use futures::{future, stream::Stream, sync::oneshot, Future};
-use hyper::{service::service_fn, Body, Method, Request, Response, Server, StatusCode};
-use serde::Deserialize;
-
-type HyperResponse = Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send>;
+use axum_macros::debug_handler;
+use serde::{Deserialize, Serialize};
+use std::{borrow::Borrow, sync::Arc, time::Duration, collections::HashMap};
+use tokio::{
+    net::TcpListener,
+    sync::{mpsc, oneshot},
+};
 
 #[derive(Debug, Clone)]
 pub enum Message {
-    Start,
-    Stop,
+    Start { server: String },
+    Stop { server: String },
     Messages(Vec<RobloxMessage>),
 }
 
@@ -21,6 +26,22 @@ pub enum Message {
 #[serde(tag = "type")]
 pub enum RobloxMessage {
     Output { level: OutputLevel, body: String },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct StartMessage {
+    server: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct StopMessage {
+    server: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StatusMessage {
+    run: bool,
+    src: String
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -31,97 +52,116 @@ pub enum OutputLevel {
     Error,
 }
 
-#[derive(Debug)]
-pub struct MessageReceiverOptions {
-    pub port: u16,
-    pub server_id: String,
+#[derive(Debug, Clone)]
+pub struct Svc {
+    message_tx: async_channel::Sender<Message>,
+    message_rx: async_channel::Receiver<Message>,
+    shutdown_tx: async_channel::Sender<()>,
+    shutdown_rx: async_channel::Receiver<()>,
+    script_source: String,
 }
 
-pub struct MessageReceiver {
-    shutdown_tx: oneshot::Sender<()>,
-    message_rx: mpsc::Receiver<Message>,
-}
+impl Svc {
+    async fn ping(State(svc): State<Arc<Svc>>) -> &'static str {
+        "OK!"
+    }
 
-impl MessageReceiver {
-    pub fn start(options: MessageReceiverOptions) -> MessageReceiver {
-        let (message_tx, message_rx) = mpsc::channel();
-        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    async fn start_handler(
+        State(svc): State<Arc<Svc>>,
+        Json(start_message): Json<StartMessage>,
+    ) -> Result<&'static str, StatusCode> {
+        svc.message_tx
+            .send(Message::Start {
+                server: start_message.server.clone(),
+            })
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        let server_id = Arc::new(options.server_id.clone());
+        Ok("Started")
+    }
 
-        thread::spawn(move || {
-            let service = move || {
-                let server_id = server_id.clone();
-                let message_tx = message_tx.clone();
+    async fn stop_handler(
+        State(svc): State<Arc<Svc>>,
+        Json(stop_message): Json<StopMessage>,
+    ) -> Result<&'static str, StatusCode> {
+        svc.message_tx
+            .send(Message::Stop {
+                server: stop_message.server.clone(),
+            })
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-                service_fn(move |request: Request<Body>| -> HyperResponse {
-                    let server_id = server_id.clone();
-                    let message_tx = message_tx.clone();
-                    let mut response = Response::new(Body::empty());
+        Ok("Stopped")
+    }
 
-                    log::debug!("Request: {} {}", request.method(), request.uri().path());
+    async fn messages_handler(
+        State(svc): State<Arc<Svc>>,
+        Json(messages): Json<Vec<RobloxMessage>>
+    ) -> Result<&'static str, StatusCode> {
+        svc.message_tx
+            .send(Message::Messages(messages.clone()))
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-                    match (request.method(), request.uri().path()) {
-                        (&Method::GET, "/") => {
-                            *response.body_mut() = Body::from(server_id.as_str().to_owned());
-                        }
-                        (&Method::POST, "/start") => {
-                            message_tx.send(Message::Start).unwrap();
-                            *response.body_mut() = Body::from("Started");
-                        }
-                        (&Method::POST, "/stop") => {
-                            message_tx.send(Message::Stop).unwrap();
-                            *response.body_mut() = Body::from("Finished");
-                        }
-                        (&Method::POST, "/messages") => {
-                            let message_tx = message_tx.clone();
+        Ok("Got it!")
+    }
 
-                            let future = request.into_body().concat2().map(move |chunk| {
-                                let source = chunk.to_vec();
-                                let messages: Vec<RobloxMessage> = serde_json::from_slice(&source)
-                                    .expect("Failed deserializing message from Roblox Studio");
+    async fn status_handler(
+        State(svc): State<Arc<Svc>>,
+        Query(params): Query<HashMap<String, String>>
+    ) -> Result<Json<StatusMessage>, StatusCode> {
+        Ok(Json(StatusMessage { 
+            run: true,
+            src: svc.script_source.clone(),
+        }))
+    }
 
-                                message_tx.send(Message::Messages(messages)).unwrap();
+    pub async fn start(script_src: String) -> Result<Arc<Self>> {
+        let (message_tx, message_rx) = async_channel::bounded(100);
+        let (shutdown_tx, shutdown_rx) = async_channel::bounded(1);
 
-                                *response.body_mut() = Body::from("Got it!");
-                                response
-                            });
-
-                            return Box::new(future);
-                        }
-                        _ => {
-                            *response.status_mut() = StatusCode::NOT_FOUND;
-                        }
-                    }
-
-                    Box::new(future::ok(response))
-                })
-            };
-
-            let addr = ([127, 0, 0, 1], options.port).into();
-            let server = Server::bind(&addr)
-                .serve(service)
-                .with_graceful_shutdown(shutdown_rx)
-                .map_err(|e| eprintln!("server error: {}", e));
-
-            hyper::rt::run(server);
+        let svc = Arc::new(Svc {
+            message_tx,
+            message_rx,
+            shutdown_tx,
+            shutdown_rx,
+            script_source: script_src
         });
 
-        MessageReceiver {
-            shutdown_tx,
-            message_rx,
+        let svc_clone = svc.clone();
+        let shutdown_signal = async move { svc_clone.shutdown_rx.recv().await.unwrap() };
+
+        let svc_clone = svc.clone();
+        let app: Router = Router::new()
+            .route("/ping", get(Self::ping))
+            .route("/start", post(Self::start_handler))
+            .route("/stop", post(Self::stop_handler))
+            .route("/messages", post(Self::messages_handler))
+            .route("/status", get(Self::status_handler))
+            .with_state(svc_clone);
+
+        let listener = TcpListener::bind("127.0.0.1:7777").await?;
+        tokio::task::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown_signal)
+                .await
+                .unwrap()
+        });
+        Ok(svc)
+    }
+
+    pub async fn recv(&self) -> Message {
+        self.message_rx.recv().await.unwrap()
+    }
+
+    pub async fn recv_timeout(&self, timeout: Duration) -> Option<Result<Message, RecvError>> {
+        match tokio::time::timeout(timeout, self.message_rx.recv()).await {
+            Ok(inner) => Some(inner),
+            Err(_) => None,
         }
     }
 
-    pub fn recv(&self) -> Message {
-        self.message_rx.recv().unwrap()
-    }
-
-    pub fn recv_timeout(&self, timeout: Duration) -> Option<Message> {
-        self.message_rx.recv_timeout(timeout).ok()
-    }
-
-    pub fn stop(self) {
-        let _dont_care = self.shutdown_tx.send(());
+    pub async fn stop(&self) {
+        let _dont_care = self.shutdown_tx.send(()).await.unwrap();
     }
 }

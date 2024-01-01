@@ -1,3 +1,5 @@
 /target
 **/*.rs.bk
 /demo/Place.rbxlx
+*.rbxm
+.DS_Store
