@@ -1,13 +1,17 @@
+#![allow(clippy::redundant_pub_crate)]
+#![allow(clippy::items_after_statements)]
 mod message_receiver;
 mod place_runner;
 
-use std::process;
 use anyhow::Result;
 use clap::Parser;
 use colored::Colorize;
 use fs_err::File;
-use std::io::Read;  
-use tokio::signal;
+use std::io::Write;
+use log::{warn, error, info};
+use std::{io::Read, sync::Arc};
+use std::process;
+use tokio::{signal, sync::Mutex};
 
 use crate::{
     message_receiver::{OutputLevel, RobloxMessage},
@@ -22,70 +26,140 @@ enum Cli {
 #[derive(Debug, clap::Args)]
 #[command(author, version, about, long_about = None)]
 struct CliOptions {
-    script: String
+    /// The script file to run
+    #[arg(short, long)]
+    script: String,
+
+    #[arg(long)]
+    place_file: Option<String>,
+
+    #[arg(long)]
+    universe_id: Option<u64>,
+
+    #[arg(long)]
+    place_id: Option<u64>,
 }
 
 async fn run(options: Cli) -> Result<i32> {
-    let Cli::Run(CliOptions { script: script_src }) = options else {
-        unreachable!()
-    };
+    let Cli::Run(CliOptions {
+        script: script_src,
+        universe_id,
+        place_id,
+        place_file,
+    }) = options;
     let mut script = File::open(script_src)?;
     let mut str = String::default();
     script.read_to_string(&mut str)?;
 
-    let place_runner = PlaceRunner { port: 7777, script: str };
+    let place_runner = PlaceRunner {
+        port: 7777,
+        script: str,
+        universe_id,
+        place_file,
+        place_id,
+    };
 
+    let (exit_sender, exit_receiver) = async_channel::unbounded::<()>();
     let (sender, receiver) = async_channel::unbounded::<Option<RobloxMessage>>();
 
+    let exit_receiver_clone = exit_receiver.clone();
     let place_runner_task = tokio::task::spawn(async move {
-        match place_runner.run(sender).await {
-            Ok(_) => (),
-            Err(e) => println!("place runner exited with: {e:?}"),
+        tokio::select! {
+            r = place_runner.run(sender, exit_receiver_clone) => {
+                match r {
+                    Ok(()) => Ok(()),
+                    Err(e) => Err(e)
+                }
+            },
         }
     });
 
-    let mut exit_code = 0;
+    let exit_code: Arc<Mutex<i32>> = Arc::new(Mutex::new(0));
 
+    let exit_code_clone = exit_code.clone();
+    let exit_receiver_clone = exit_receiver.clone();
     let printer_task = tokio::task::spawn(async move {
-        while let Ok(message) = receiver.recv().await {
-            match message {
-                Some(RobloxMessage::Output { level, body }) => {
-                    let colored_body = match level {
-                        OutputLevel::Print => body.normal(),
-                        OutputLevel::Info => body.cyan(),
-                        OutputLevel::Warning => body.yellow(),
-                        OutputLevel::Error => body.red(),
-                    };
+        loop {
+            tokio::select! {
+                Ok(message) = receiver.recv() => {
+                    match message {
+                        Some(RobloxMessage::Output { level, body, server }) => {
+                            let server = format!("studio-{}", &server[0..7]);
 
-                    println!("{}", colored_body);
+                            match level {
+                                OutputLevel::Print => info!(target: &server, "{body:}"),
+                                OutputLevel::Info => info!(target: &server, "{body:}"),
+                                OutputLevel::Warning => warn!(target: &server, "{body:}"),
+                                OutputLevel::Error => error!(target: &server, "{body:}"),
+                                OutputLevel::ScriptError => error!(target: &server, "{body:}"),
+                            };
 
-                    if level == OutputLevel::Error {
-                        exit_code = 1;
+                            if level == OutputLevel::ScriptError {
+                                warn!("exiting with code 1 due to script erroring");
+                                let mut exit_code = exit_code_clone.lock().await;
+                                *exit_code = 1;
+                            }
+                        }
+                        None => return,
                     }
-                }
-                None => (),
+                },
+                _ = exit_receiver_clone.recv() => return
             }
         }
     });
 
-    tokio::select! {
-        _ = signal::ctrl_c() => {
-            println!("goodbye!");
-            place_runner_task.abort();
-            printer_task.abort();
-        }
+    async fn close_shop(exit_sender: &async_channel::Sender<()>) {
+        exit_sender.send(()).await.unwrap();
     }
 
-    Ok(exit_code)
+    tokio::select! {
+        res = place_runner_task => {
+            match res.unwrap() {
+                Ok(()) => (),
+                Err(e) => error!("place runner task exited early with err: {e:?}")
+            }
+            close_shop(&exit_sender).await;
+            Ok(1)
+        }
+        _ = printer_task => {
+            warn!("printer task exited early - closing up shop");
+            close_shop(&exit_sender).await;
+            Ok(1)
+        },
+        _ = signal::ctrl_c() => {
+            info!("goodbye!");
+            close_shop(&exit_sender).await;
+            let exit_code = exit_code.lock().await;
+            Ok(*exit_code)
+        }
+    }
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let options = Cli::parse();
-    let log_env = env_logger::Env::default().default_filter_or("warn");
+    let log_env = env_logger::Env::default().default_filter_or("info");
 
     env_logger::Builder::from_env(log_env)
-        .format_timestamp(None)
+        .format(|buf, record| {
+            let level = match record.level() {
+                log::Level::Debug => "DEBUG".dimmed(),
+                log::Level::Trace => "TRACE".white(),
+                log::Level::Info => "INFO".green(),
+                log::Level::Warn => "WARN".yellow().bold(),
+                log::Level::Error => "ERROR".red().bold()
+            };
+            let ts = buf.timestamp_seconds();
+            let args = record.args().to_string();
+            let args = match record.level() {
+                log::Level::Debug => args.dimmed(),
+                log::Level::Trace => args.white(),
+                log::Level::Info => args.green(),
+                log::Level::Warn => args.yellow().bold(),
+                log::Level::Error => args.red().bold()
+            };
+            writeln!(buf, "[{} {} {}] {}", ts, level, record.target(), args)
+        })
         .init();
 
     match run(options).await {
