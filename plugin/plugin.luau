@@ -8,11 +8,17 @@ if not RunService:IsStudio() then
   return
 end
 
+function pingCoordinator() 
+  return pcall(function()
+    return HttpService:GetAsync(string.format("%s?server=%s", SERVER_URL .. "/ping", SERVER_ID))
+  end)
+end
+
 function waitForStart()
   local backoff = 1
   while true do
     local pingSuccess, e = pcall(function()
-      return HttpService:GetAsync(string.format("%s%s", SERVER_URL, "/ping"))
+      return HttpService:GetAsync(SERVER_URL .. "/")
     end)
     if pingSuccess then
       break
@@ -44,6 +50,19 @@ function getStatusMessage()
   return message
 end
 
+function getEvents()
+  local success, events = pcall(function()
+    return HttpService:GetAsync(string.format("%s?server=%s", SERVER_URL .. "/events", SERVER_ID))
+  end)
+
+  if not success then
+    return nil
+  end
+
+  local events = HttpService:JSONDecode(events)
+  return events
+end
+
 waitForStart()
 
 Logger:init(SERVER_ID, SERVER_URL)
@@ -60,16 +79,10 @@ function cleanup()
   }))
 end
 
-while true do
-  local message = getStatusMessage()
-  if not message.run then
-    wait(2)
-    cleanup()
-    return
-  end
-
+function runScript(src)
   local script = Instance.new("ModuleScript")
-  script.Source = message.src
+  script.Name = "run-in-roblox-script"
+  script.Source = src
   script.Parent = game:GetService("Workspace")
 
   local loadSuccess, messageOrMain = xpcall(require, debug.traceback, script)
@@ -81,7 +94,7 @@ while true do
     end)
     sacrificialEvent:Fire()
     wait(2)
-    continue
+    return
   end
 
   if not messageOrMain.Main then
@@ -91,26 +104,42 @@ while true do
     end)
     sacrificialEvent:Fire()
     wait(2)
-    continue
+    return
   end
 
-  local mainSuccess, message = xpcall(messageOrMain.Main, debug.traceback)
+  local success, retVal = xpcall(messageOrMain.Main, debug.traceback)
+  if not success then
+    Logger:errorHandler(retVal)
+  end
 
-  if not mainSuccess then
-    local sacrificialEvent = Instance.new("BindableEvent")
-    sacrificialEvent.Event:Connect(function()
-      warn('caught an error while calling your main method - the error message will be printed below:')
-      error(message, 0)
-    end)
-    sacrificialEvent:Fire()
+  script.Parent = nil
+  script:Destroy()
+end
+
+while true do
+  local success, e = pingCoordinator()
+  if not success then
+    warn('backend server is no longer alive - exiting main loop')
+    warn(`got error {e}`)
     wait(2)
-    continue
-  else
-    script.Parent = nil
-    script:Destroy()
+    cleanup()
+    return
   end
 
-  wait(15)
+  local events = getEvents()
+  if not events then 
+    wait(2)
+    cleanup()
+    return
+  end
+
+  for _, v in ipairs(events) do
+    if v.RunScript then
+      runScript(v.RunScript.script)
+    end
+    -- print(v)
+  end
+  wait(1)
 end
 
 
