@@ -99,7 +99,7 @@ while true do
   if not mainSuccess then
     local sacrificialEvent = Instance.new("BindableEvent")
     sacrificialEvent.Event:Connect(function()
-      print('caught an error while calling your main method - the error message will be printed below:')
+      warn('caught an error while calling your main method - the error message will be printed below:')
       error(message, 0)
     end)
     sacrificialEvent:Fire()
