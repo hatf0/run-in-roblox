@@ -58,7 +58,10 @@ pub enum OutputLevel {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum RobloxEvent {
-    RunScript { script: String },
+    RunScript { 
+        script: String,
+        oneshot: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -72,30 +75,34 @@ pub struct Svc {
 
 #[derive(Debug)]
 pub struct StudioInstance {
-    instances: Arc<RwLock<HashMap<String, Arc<RwLock<StudioInstance>>>>>,
+    service: Arc<Svc>,
     id: String,
     event_queue: Vec<RobloxEvent>,
     stale_remover: Option<JoinHandle<()>>,
+    
 }
 
 impl StudioInstance {
-    fn new(id: String, instances: Arc<RwLock<HashMap<String, Arc<RwLock<Self>>>>>) -> Self {
+    fn new(id: String, service: Arc<Svc>) -> Self {
         Self {
             id,
-            instances,
+            service,
             event_queue: Vec::new(),
             stale_remover: None,
         }
     }
 
     fn create_stale_task(&mut self) {
-        let instances_clone = self.instances.clone();
+        let service_clone = self.service.clone();
         let id_clone = self.id.clone();
         self.stale_remover = Some(tokio::task::spawn(async move {
             sleep(Duration::from_secs(10)).await;
+            let service = service_clone;
             info!("removing studio server {} as it is now stale", &id_clone);
-            let mut instances = instances_clone.write().await;
+            let mut instances = service.instances.write().await;
             instances.remove(&id_clone);
+            drop(instances);
+            service.message_tx.send(Message::Stop { server: id_clone }).await.unwrap();
         }));
     }
 
@@ -247,9 +254,8 @@ impl Svc {
 
     pub async fn create_server(&self, server: String) -> Arc<RwLock<StudioInstance>> {
         debug!("creating new server {server:}");
-        let instances_clone = self.instances.clone();
         let mut instances = self.instances.write().await;
-        let mut instance = StudioInstance::new(server.clone(), instances_clone);
+        let mut instance = StudioInstance::new(server.clone(), Arc::new(self.clone()));
         instance.create_stale_task();
         let instance = Arc::new(RwLock::new(instance));
         instances.insert(server, instance.clone());

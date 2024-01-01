@@ -136,6 +136,11 @@ while true do
   for _, v in ipairs(events) do
     if v.RunScript then
       runScript(v.RunScript.script)
+      if v.RunScript.oneshot then
+        wait(2)
+        cleanup()
+        return
+      end
     end
     -- print(v)
   end

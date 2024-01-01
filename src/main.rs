@@ -20,12 +20,12 @@ use crate::{
 
 #[derive(Debug, Parser)]
 enum Cli {
-    Run(CliOptions),
+    Run(RunOptions),
 }
 
 #[derive(Debug, clap::Args)]
 #[command(author, version, about, long_about = None)]
-struct CliOptions {
+struct RunOptions {
     /// The script file to run
     #[arg(short, long)]
     script: String,
@@ -38,16 +38,24 @@ struct CliOptions {
 
     #[arg(long)]
     place_id: Option<u64>,
+
+    #[arg(short, long)]
+    oneshot: bool,
+
+    #[arg(short, long)]
+    no_launch: bool,
 }
 
-async fn run(options: Cli) -> Result<i32> {
-    let Cli::Run(CliOptions {
-        script: script_src,
+async fn run(options: RunOptions) -> Result<i32> {
+    let RunOptions {
+        script,
         universe_id,
         place_id,
         place_file,
-    }) = options;
-    let mut script = File::open(script_src)?;
+        oneshot,
+        no_launch,
+    } = options;
+    let mut script = File::open(script)?;
     let mut str = String::default();
     script.read_to_string(&mut str)?;
 
@@ -57,6 +65,8 @@ async fn run(options: Cli) -> Result<i32> {
         universe_id,
         place_file,
         place_id,
+        oneshot,
+        no_launch,
     };
 
     let (exit_sender, exit_receiver) = async_channel::unbounded::<()>();
@@ -114,12 +124,17 @@ async fn run(options: Cli) -> Result<i32> {
 
     tokio::select! {
         res = place_runner_task => {
-            match res.unwrap() {
-                Ok(()) => (),
-                Err(e) => error!("place runner task exited early with err: {e:?}")
-            }
+            let exit_code = match res.unwrap() {
+                Ok(()) => {
+                    0
+                },
+                Err(e) => {
+                    error!("place runner task exited early with err: {e:?}");
+                    1
+                }
+            };
             close_shop(&exit_sender).await;
-            Ok(1)
+            Ok(exit_code)
         }
         _ = printer_task => {
             warn!("printer task exited early - closing up shop");
@@ -162,11 +177,16 @@ async fn main() -> anyhow::Result<()> {
         })
         .init();
 
-    match run(options).await {
-        Ok(exit_code) => process::exit(exit_code),
-        Err(err) => {
-            log::error!("{:?}", err);
-            process::exit(2);
+    match options {
+        Cli::Run(options) => {
+            match run(options).await {
+                Ok(exit_code) => process::exit(exit_code),
+                Err(err) => {
+                    log::error!("{:?}", err);
+                    process::exit(2);
+                }
+            }
         }
     }
+
 }

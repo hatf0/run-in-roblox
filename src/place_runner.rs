@@ -3,7 +3,7 @@ use std::{
     process::{self, Command, Stdio},
 };
 
-use anyhow::{bail, Context};
+use anyhow::{bail, Context, Result};
 use fs_err::File;
 use log::info;
 use roblox_install::RobloxStudio;
@@ -25,14 +25,12 @@ pub struct PlaceRunner {
     pub universe_id: Option<u64>,
     pub place_id: Option<u64>,
     pub place_file: Option<String>,
+    pub no_launch: bool,
+    pub oneshot: bool,
 }
 
 impl PlaceRunner {
-    pub async fn run(
-        &self,
-        sender: async_channel::Sender<Option<RobloxMessage>>,
-        exit_receiver: async_channel::Receiver<()>,
-    ) -> Result<(), anyhow::Error> {
+    pub fn install_plugin() -> Result<()> {
         let studio_install =
             RobloxStudio::locate().context("Could not locate a Roblox Studio installation.")?;
 
@@ -45,6 +43,37 @@ impl PlaceRunner {
         let mut local_plugin_data = vec![];
         local_plugin.read_to_end(&mut local_plugin_data)?;
 
+        if std::fs::create_dir_all(studio_install.plugins_path()).is_err() {
+            bail!("could not create plugins directory - are you missing permissions to write to `{:?}`?", studio_install.plugins_path());
+        }
+
+        let plugin_file_path = studio_install.plugins_path().join("run_in_roblox.rbxm");
+
+        let mut plugin_file = File::create(plugin_file_path)?;
+        plugin_file.write_all(&local_plugin_data)?;
+        Ok(())
+    }
+
+    pub fn remove_plugin() -> Result<()> {
+        let studio_install =
+            RobloxStudio::locate().context("Could not locate a Roblox Studio installation.")?;
+
+        let plugin_file_path = studio_install.plugins_path().join("run_in_roblox.rbxm");
+
+        std::fs::remove_file(plugin_file_path)?;
+        Ok(())
+    }
+
+    pub async fn run(
+        &self,
+        sender: async_channel::Sender<Option<RobloxMessage>>,
+        exit_receiver: async_channel::Receiver<()>,
+    ) -> Result<(), anyhow::Error> {
+        let studio_install =
+            RobloxStudio::locate().context("Could not locate a Roblox Studio installation.")?;
+
+        Self::install_plugin()?;
+
         let studio_args = match (&self.place_file, self.universe_id, self.place_id) {
             (None, Some(universe_id), Some(place_id)) => {
                 vec![
@@ -53,47 +82,45 @@ impl PlaceRunner {
                     "-placeId".to_string(),
                     format!("{place_id:}"),
                     "-universeId".to_string(),
-                    format!("{universe_id:}")
+                    format!("{universe_id:}"),
                 ]
-            },
+            }
             (None, None, Some(place_id)) => {
                 vec![
                     "-task".to_string(),
                     "EditPlace".to_string(),
                     "-placeId".to_string(),
-                    format!("{place_id:}")
+                    format!("{place_id:}"),
                 ]
-            },
+            }
             (Some(place_file), None, None) => {
-                vec![
-                    place_file.clone()
-                ]
-            },
-            _ => bail!("invalid arguments passed - you may only specify a place_id (and optionally a universe_id), or a place_file, but not both")
+                vec![place_file.clone()]
+            }
+            _ => {
+                if self.no_launch {
+                    vec![]
+                } else {
+                    bail!("invalid arguments passed - you may only specify a place_id (and optionally a universe_id), or a place_file, but not both")
+                }
+            }
         };
-
-        if std::fs::create_dir_all(studio_install.plugins_path()).is_err() {
-            bail!("could not create plugins directory - are you missing permissions to write to `{:?}`?", studio_install.plugins_path());
-        }
-
-        let plugin_file_path = studio_install.plugins_path().join("run_in_roblox.rbxm");
-
-        let mut plugin_file = File::create(&plugin_file_path)?;
-        plugin_file.write_all(&local_plugin_data)?;
 
         let api_svc = message_receiver::Svc::start()
             .await
             .expect("api service to start");
 
-        info!("launching roblox studio with args {studio_args:?}");
-
-        let studio_process = KillOnDrop(
-            Command::new(studio_install.application_path())
-                .args(studio_args)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()?,
-        );
+        let studio_process = if self.no_launch {
+            None
+        } else {
+            info!("launching roblox studio with args {studio_args:?}");
+            Some(KillOnDrop(
+                Command::new(studio_install.application_path())
+                    .args(studio_args)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()?,
+            ))
+        };
 
         loop {
             tokio::select! {
@@ -106,12 +133,17 @@ impl PlaceRunner {
                                     server,
                                     message_receiver::RobloxEvent::RunScript {
                                         script: self.script.clone(),
+                                        oneshot: self.oneshot
                                     },
                                 )
                                 .await;
                         }
                         Message::Stop { server } => {
                             info!("studio server {server:} stopped");
+                            if self.oneshot {
+                                info!("now exiting as --oneshot was set to true.");
+                                break;
+                            }
                         }
                         Message::Messages(roblox_messages) => {
                             for message in roblox_messages {
@@ -129,7 +161,7 @@ impl PlaceRunner {
         drop(studio_process);
         api_svc.stop().await;
         sender.close();
-        std::fs::remove_file(&plugin_file_path)?;
+        Self::remove_plugin()?;
 
         Ok(())
     }
