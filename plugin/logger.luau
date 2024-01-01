@@ -1,6 +1,7 @@
 local HttpService = game:GetService("HttpService")
 local RunService = game:GetService("RunService")
 local LogService = game:GetService("LogService")
+local ScriptContext = game:GetService("ScriptContext")
 
 local module = {
   queuedMessages = {},
@@ -10,6 +11,7 @@ local module = {
   serverUrl = "",
   heartbeatConnection = nil,
   logConnection = nil,
+  errorConnection = nil,
 }
 
 local logTypeToLevel = {
@@ -24,7 +26,7 @@ function module:flushMessages()
     self.timeSinceLastSend = 0
     return
   end
-  
+
 	local encoded = HttpService:JSONEncode(self.queuedMessages)
 	self.queuedMessages = {}
   local backoff = 1
@@ -53,9 +55,39 @@ function module:heartbeat(dt: number)
 end
 
 function module:handleLogEvent(body: string, messageType: Enum.MessageType)
+  local level = logTypeToLevel[messageType] or "Info"
+  if level == "Info" or level == "Print" or level == "Warning" then
+    table.insert(self.queuedMessages, {
+      type = "Output",
+      level = level,
+      server = self.serverId,
+      body = body,
+    })
+  end
+end
+
+function module:errorHandler(message: string)
+  local traceback = message
   table.insert(self.queuedMessages, {
     type = "Output",
-    level = logTypeToLevel[messageType] or "Info",
+    level = "Warning",
+    server = self.serverId,
+    body = "caught an error while calling your main method - the error message will be printed below:"
+  })
+  table.insert(self.queuedMessages, {
+    type = "Output",
+    level = "ScriptError",
+    server = self.serverId,
+    body = traceback,
+  })
+end
+
+function module:handleScriptError(message: string, trace: string, script: Instance)
+  local scriptName = script:GetFullName()
+  local body = scriptName .. "\n" .. message .. trace
+  table.insert(self.queuedMessages, {
+    type = "Output",
+    level = "Error",
     server = self.serverId,
     body = body,
   })
@@ -71,6 +103,10 @@ function module:init(serverId: string, serverUrl: string)
   self.logConnection = LogService.MessageOut:Connect(function(body, messageType)
     module:handleLogEvent(body, messageType)
   end)
+
+  self.errorConnection = ScriptContext.Error:Connect(function(message: string, trace: string, script: Instance)
+    module:handleScriptError(message, trace, script)
+  end)
 end
 
 function module:disconnect()
@@ -78,6 +114,8 @@ function module:disconnect()
   self.heartbeatConnection = nil
   self.logConnection:Disconnect()
   self.logConnection = nil
+  self.errorConnection:Disconnect()
+  self.errorConnection = nil
 end
 
 return module
