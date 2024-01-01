@@ -7,6 +7,7 @@ use clap::Parser;
 use colored::Colorize;
 use fs_err::File;
 use std::io::Read;  
+use tokio::signal;
 
 use crate::{
     message_receiver::{OutputLevel, RobloxMessage},
@@ -36,7 +37,7 @@ async fn run(options: Cli) -> Result<i32> {
 
     let (sender, receiver) = async_channel::unbounded::<Option<RobloxMessage>>();
 
-    tokio::task::spawn(async move {
+    let place_runner_task = tokio::task::spawn(async move {
         match place_runner.run(sender).await {
             Ok(_) => (),
             Err(e) => println!("place runner exited with: {e:?}"),
@@ -45,23 +46,33 @@ async fn run(options: Cli) -> Result<i32> {
 
     let mut exit_code = 0;
 
-    while let Ok(message) = receiver.recv().await {
-        match message {
-            Some(RobloxMessage::Output { level, body }) => {
-                let colored_body = match level {
-                    OutputLevel::Print => body.normal(),
-                    OutputLevel::Info => body.cyan(),
-                    OutputLevel::Warning => body.yellow(),
-                    OutputLevel::Error => body.red(),
-                };
+    let printer_task = tokio::task::spawn(async move {
+        while let Ok(message) = receiver.recv().await {
+            match message {
+                Some(RobloxMessage::Output { level, body }) => {
+                    let colored_body = match level {
+                        OutputLevel::Print => body.normal(),
+                        OutputLevel::Info => body.cyan(),
+                        OutputLevel::Warning => body.yellow(),
+                        OutputLevel::Error => body.red(),
+                    };
 
-                println!("{}", colored_body);
+                    println!("{}", colored_body);
 
-                if level == OutputLevel::Error {
-                    exit_code = 1;
+                    if level == OutputLevel::Error {
+                        exit_code = 1;
+                    }
                 }
+                None => (),
             }
-            None => (),
+        }
+    });
+
+    tokio::select! {
+        _ = signal::ctrl_c() => {
+            println!("goodbye!");
+            place_runner_task.abort();
+            printer_task.abort();
         }
     }
 
