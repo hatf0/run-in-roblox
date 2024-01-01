@@ -7,10 +7,10 @@ use anyhow::Result;
 use clap::Parser;
 use colored::Colorize;
 use fs_err::File;
+use log::{error, info, warn};
 use std::io::Write;
-use log::{warn, error, info};
-use std::{io::Read, sync::Arc};
 use std::process;
+use std::{io::Read, sync::Arc};
 use tokio::{signal, sync::Mutex};
 
 use crate::{
@@ -163,7 +163,7 @@ async fn main() -> anyhow::Result<()> {
                 log::Level::Trace => "TRACE".white(),
                 log::Level::Info => "INFO".green(),
                 log::Level::Warn => "WARN".yellow().bold(),
-                log::Level::Error => "ERROR".red().bold()
+                log::Level::Error => "ERROR".red().bold(),
             };
             let ts = buf.timestamp_seconds();
             let args = record.args().to_string();
@@ -172,22 +172,19 @@ async fn main() -> anyhow::Result<()> {
                 log::Level::Trace => args.white(),
                 log::Level::Info => args.green(),
                 log::Level::Warn => args.yellow().bold(),
-                log::Level::Error => args.red().bold()
+                log::Level::Error => args.red().bold(),
             };
             writeln!(buf, "[{} {} {}] {}", ts, level, record.target(), args)
         })
         .init();
 
     match options {
-        Cli::Run(options) => {
-            match run(options).await {
-                Ok(exit_code) => process::exit(exit_code),
-                Err(err) => {
-                    log::error!("{:?}", err);
-                    process::exit(2);
-                }
+        Cli::Run(options) => match run(options).await {
+            Ok(exit_code) => process::exit(exit_code),
+            Err(err) => {
+                log::error!("{:?}", err);
+                process::exit(2);
             }
-        }
+        },
     }
-
 }

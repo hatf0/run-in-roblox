@@ -10,9 +10,9 @@ use axum::{
     Router,
 };
 
-use log::{info, debug};
-use serde::{Deserialize, Serialize};
 use dashmap::DashMap;
+use log::{debug, info};
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{net::TcpListener, sync::RwLock, task::JoinHandle, time::sleep};
 
@@ -59,10 +59,7 @@ pub enum OutputLevel {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum RobloxEvent {
-    RunScript { 
-        script: String,
-        oneshot: bool,
-    },
+    RunScript { script: String, oneshot: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -80,7 +77,6 @@ pub struct StudioInstance {
     id: String,
     event_queue: Vec<RobloxEvent>,
     stale_remover: Option<JoinHandle<()>>,
-    
 }
 
 impl StudioInstance {
@@ -101,7 +97,11 @@ impl StudioInstance {
             let service = service_clone;
             info!("removing studio server {} as it is now stale", &id_clone);
             service.instances.remove(&id_clone);
-            service.message_tx.send(Message::Stop { server: id_clone }).await.unwrap();
+            service
+                .message_tx
+                .send(Message::Stop { server: id_clone })
+                .await
+                .unwrap();
         }));
     }
 
