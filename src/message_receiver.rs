@@ -12,6 +12,7 @@ use axum::{
 
 use log::{info, debug};
 use serde::{Deserialize, Serialize};
+use dashmap::DashMap;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{net::TcpListener, sync::RwLock, task::JoinHandle, time::sleep};
 
@@ -70,7 +71,7 @@ pub struct Svc {
     message_rx: async_channel::Receiver<Message>,
     shutdown_tx: async_channel::Sender<()>,
     shutdown_rx: async_channel::Receiver<()>,
-    instances: Arc<RwLock<HashMap<String, Arc<RwLock<StudioInstance>>>>>,
+    instances: Arc<DashMap<String, Arc<RwLock<StudioInstance>>>>,
 }
 
 #[derive(Debug)]
@@ -99,9 +100,7 @@ impl StudioInstance {
             sleep(Duration::from_secs(10)).await;
             let service = service_clone;
             info!("removing studio server {} as it is now stale", &id_clone);
-            let mut instances = service.instances.write().await;
-            instances.remove(&id_clone);
-            drop(instances);
+            service.instances.remove(&id_clone);
             service.message_tx.send(Message::Stop { server: id_clone }).await.unwrap();
         }));
     }
@@ -124,8 +123,7 @@ impl Svc {
         Query(params): Query<HashMap<String, String>>,
     ) -> Result<&'static str, StatusCode> {
         let server_id = params.get("server").ok_or(StatusCode::BAD_REQUEST)?;
-        let instances = svc.instances.read().await;
-        if let Some(server) = instances.get(server_id) {
+        if let Some(server) = svc.instances.get(server_id) {
             debug!("studio server {server_id:} checked in");
             let mut server = server.write().await;
             server.freshen();
@@ -170,8 +168,7 @@ impl Svc {
         Query(params): Query<HashMap<String, String>>,
     ) -> Result<Json<Vec<RobloxEvent>>, StatusCode> {
         let server = params.get("server").ok_or(StatusCode::BAD_REQUEST)?;
-        let instances = svc.instances.read().await;
-        if let Some(server) = instances.get(server) {
+        if let Some(server) = svc.instances.get(server) {
             let mut server = server.write().await;
             let events_clone = server.event_queue.clone();
             server.event_queue.clear();
@@ -210,7 +207,7 @@ impl Svc {
             message_rx,
             shutdown_tx,
             shutdown_rx,
-            instances: Arc::new(RwLock::new(HashMap::new())),
+            instances: Arc::new(DashMap::new()),
         });
 
         let svc_clone = svc.clone();
@@ -238,14 +235,12 @@ impl Svc {
     }
 
     pub async fn queue_event(&self, server: String, msg: RobloxEvent) {
-        let instances = self.instances.read().await;
         debug!("queuing message {msg:?} for server {server:}");
-        if let Some(server) = instances.get(&server) {
+        if let Some(server) = self.instances.get(&server) {
             let mut server = server.write().await;
             server.event_queue.push(msg);
         } else {
             info!("could not find server instance for {server:}, creating new one..");
-            drop(instances);
             let server = self.create_server(server).await;
             let mut server = server.write().await;
             server.event_queue.push(msg);
@@ -254,11 +249,10 @@ impl Svc {
 
     pub async fn create_server(&self, server: String) -> Arc<RwLock<StudioInstance>> {
         debug!("creating new server {server:}");
-        let mut instances = self.instances.write().await;
         let mut instance = StudioInstance::new(server.clone(), Arc::new(self.clone()));
         instance.create_stale_task();
         let instance = Arc::new(RwLock::new(instance));
-        instances.insert(server, instance.clone());
+        self.instances.insert(server, instance.clone());
         instance
     }
 
