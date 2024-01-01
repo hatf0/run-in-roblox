@@ -126,7 +126,8 @@ async fn run(options: RunOptions) -> Result<i32> {
         res = place_runner_task => {
             let exit_code = match res.unwrap() {
                 Ok(()) => {
-                    0
+                    let exit_code = exit_code.lock().await;
+                    *exit_code
                 },
                 Err(e) => {
                     error!("place runner task exited early with err: {e:?}");
