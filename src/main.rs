@@ -31,7 +31,7 @@ struct RunOptions {
     script: String,
 
     #[arg(long)]
-    place_file: String,
+    place_file: Option<String>,
 
     #[arg(long)]
     universe_id: Option<u64>,
@@ -44,6 +44,9 @@ struct RunOptions {
 
     #[arg(short, long)]
     no_launch: bool,
+
+    #[arg(short, long)]
+    team_test: bool,
 }
 
 async fn run(options: RunOptions) -> Result<i32> {
@@ -54,6 +57,7 @@ async fn run(options: RunOptions) -> Result<i32> {
         place_file,
         oneshot,
         no_launch,
+        team_test
     } = options;
     let mut script = File::open(script)?;
     let mut str = String::default();
@@ -67,6 +71,7 @@ async fn run(options: RunOptions) -> Result<i32> {
         place_id,
         oneshot,
         no_launch,
+        team_test
     };
 
     let (exit_sender, exit_receiver) = async_channel::unbounded::<()>();

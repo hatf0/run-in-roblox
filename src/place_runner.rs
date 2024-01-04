@@ -22,11 +22,12 @@ impl Drop for KillOnDrop {
 pub struct PlaceRunner {
     pub port: u16,
     pub script: String,
-    pub place_file: String,
+    pub place_file: Option<String>,
     pub universe_id: Option<u64>,
     pub place_id: Option<u64>,
     pub no_launch: bool,
     pub oneshot: bool,
+    pub team_test: bool,
 }
 
 impl PlaceRunner {
@@ -74,27 +75,39 @@ impl PlaceRunner {
 
         Self::install_plugin()?;
 
-        let studio_args = vec![
-            "-task".to_string(),
-            "StartServer".to_string(),
-            "-placeId".to_string(),
-            "0".to_string(),
-            "-universeId".to_string(),
-            "0".to_string(),
-            "-creatorId".to_string(),
-            "0".to_string(),
-            "-creatorType".to_string(),
-            "0".to_string(),
-            "-numtestserverplayersuponstartup".to_string(),
-            "0".to_string()
-        ];
-
-        std::fs::copy(
-            &self.place_file,
-            dbg!(studio_install
-                .plugins_path()
-                .join("../server.rbxl"))
-        )?;
+        let studio_args = match &self.team_test {
+            true => {
+                vec![
+                    "-task".to_string(),
+                    "StartTeamTest".to_string(),
+                    "-placeId".to_string(),
+                    format!("{:}", self.place_id.unwrap()),
+                    "-universeId".to_string(),
+                    format!("{:}", self.universe_id.unwrap()),
+                ]
+            }
+            false => {
+                let place_file = self.place_file.as_ref().unwrap();
+                std::fs::copy(
+                    place_file,
+                    dbg!(studio_install.plugins_path().join("../server.rbxl")),
+                )?;
+                vec![
+                    "-task".to_string(),
+                    "StartServer".to_string(),
+                    "-placeId".to_string(),
+                    "0".to_string(),
+                    "-universeId".to_string(),
+                    "0".to_string(),
+                    "-creatorId".to_string(),
+                    "0".to_string(),
+                    "-creatorType".to_string(),
+                    "0".to_string(),
+                    "-numtestserverplayersuponstartup".to_string(),
+                    "0".to_string(),
+                ]
+            }
+        };
 
         let api_svc = message_receiver::Svc::start()
             .await
