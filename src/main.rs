@@ -31,7 +31,7 @@ struct RunOptions {
     script: String,
 
     #[arg(long)]
-    place_file: Option<String>,
+    place_file: String,
 
     #[arg(long)]
     universe_id: Option<u64>,

@@ -22,9 +22,9 @@ impl Drop for KillOnDrop {
 pub struct PlaceRunner {
     pub port: u16,
     pub script: String,
+    pub place_file: String,
     pub universe_id: Option<u64>,
     pub place_id: Option<u64>,
-    pub place_file: Option<String>,
     pub no_launch: bool,
     pub oneshot: bool,
 }
@@ -74,36 +74,27 @@ impl PlaceRunner {
 
         Self::install_plugin()?;
 
-        let studio_args = match (&self.place_file, self.universe_id, self.place_id) {
-            (None, Some(universe_id), Some(place_id)) => {
-                vec![
-                    "-task".to_string(),
-                    "EditPlace".to_string(),
-                    "-placeId".to_string(),
-                    format!("{place_id:}"),
-                    "-universeId".to_string(),
-                    format!("{universe_id:}"),
-                ]
-            }
-            (None, None, Some(place_id)) => {
-                vec![
-                    "-task".to_string(),
-                    "EditPlace".to_string(),
-                    "-placeId".to_string(),
-                    format!("{place_id:}"),
-                ]
-            }
-            (Some(place_file), None, None) => {
-                vec![place_file.clone()]
-            }
-            _ => {
-                if self.no_launch {
-                    vec![]
-                } else {
-                    bail!("invalid arguments passed - you may only specify a place_id (and optionally a universe_id), or a place_file, but not both")
-                }
-            }
-        };
+        let studio_args = vec![
+            "-task".to_string(),
+            "StartServer".to_string(),
+            "-placeId".to_string(),
+            "0".to_string(),
+            "-universeId".to_string(),
+            "0".to_string(),
+            "-creatorId".to_string(),
+            "0".to_string(),
+            "-creatorType".to_string(),
+            "0".to_string(),
+            "-numtestserverplayersuponstartup".to_string(),
+            "0".to_string()
+        ];
+
+        std::fs::copy(
+            &self.place_file,
+            dbg!(studio_install
+                .plugins_path()
+                .join("../server.rbxl"))
+        )?;
 
         let api_svc = message_receiver::Svc::start()
             .await
