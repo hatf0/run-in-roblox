@@ -63,9 +63,9 @@ function getEvents()
   return events
 end
 
-waitForStart()
-
 Logger:init(SERVER_ID, SERVER_URL)
+waitForStart()
+Logger.sendMessages = true
 
 -- register with the external coordinator
 HttpService:PostAsync(SERVER_URL .. "/start", HttpService:JSONEncode({

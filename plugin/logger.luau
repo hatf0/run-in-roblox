@@ -7,6 +7,7 @@ local module = {
   queuedMessages = {},
   timeSinceLastSend = 0,
   messageSendRate = 0.1,
+  sendMessages = false,
   serverId = "",
   serverUrl = "",
   heartbeatConnection = nil,
@@ -48,6 +49,9 @@ function module:flushMessages()
 end
 
 function module:heartbeat(dt: number)
+    if not self.sendMessages then
+      return
+    end
     self.timeSinceLastSend = self.timeSinceLastSend + dt
 
     if self.timeSinceLastSend >= self.messageSendRate then
