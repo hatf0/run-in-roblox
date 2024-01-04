@@ -101,6 +101,16 @@ end
 function module:init(serverId: string, serverUrl: string) 
   self.serverId = serverId
   self.serverUrl = serverUrl
+  -- queue up any messages we may have missed
+  for i, v in ipairs(LogService:GetLogHistory()) do
+    local level = logTypeToLevel[v.messageType] or "Info"
+    table.insert(self.queuedMessages, {
+      type = "Output",
+      level = level,
+      server = self.serverId,
+      body = v.message
+    })
+  end
   self.heartbeatConnection = RunService.Heartbeat:Connect(function(dt)
     module:heartbeat(dt)
   end)
