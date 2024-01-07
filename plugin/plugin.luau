@@ -30,9 +30,7 @@ function waitForStart()
         while true do
         end
       end
-      print(e)
     end
-    print(string.format('waiting %d seconds for run-on-roblox service to come alive...', backoff))
     wait(backoff)
     backoff = backoff * 2
   end
@@ -63,20 +61,56 @@ function getEvents()
   return events
 end
 
-Logger:init(SERVER_ID, SERVER_URL)
-waitForStart()
-Logger.sendMessages = true
+function init()
+  Logger:init(SERVER_ID, SERVER_URL)
+  waitForStart()
+  -- register with the external coordinator
+  local success, e = pcall(function()
+    HttpService:PostAsync(SERVER_URL .. "/start", HttpService:JSONEncode({
+      server = SERVER_ID
+    }))
+  end)
+  if not success then
+    warn("failed to register with backend service")
+    warn(e)
+    return false
+  else
+    Logger.sendMessages = true
+    return true
+  end
+end
 
--- register with the external coordinator
-HttpService:PostAsync(SERVER_URL .. "/start", HttpService:JSONEncode({
-	server = SERVER_ID
-}))
+function reinit()
+  waitForStart()
+  -- register with the external coordinator
+  local success, e = pcall(function()
+    HttpService:PostAsync(SERVER_URL .. "/start", HttpService:JSONEncode({
+      server = SERVER_ID
+    }))
+  end)
+  if not success then
+    warn("failed to register with backend service")
+    warn(e)
+    return false
+  else
+    Logger.queuedMessages = {}
+    Logger.tryFlush = true
+    Logger.sendMessages = true
+    Logger:backfillMessages()
+    Logger:connect()
+    return true
+  end
+end
+
+init()
 
 function cleanup() 
   Logger:disconnect()
-  HttpService:PostAsync(SERVER_URL .. "/stop", HttpService:JSONEncode({
-    server = SERVER_ID
-  }))
+  pcall(function ()
+    HttpService:PostAsync(SERVER_URL .. "/stop", HttpService:JSONEncode({
+      server = SERVER_ID
+    }))
+  end)
 end
 
 function runScript(src)
@@ -93,7 +127,9 @@ function runScript(src)
       error('could not call `require` on your script - please make sure that it is a proper ModuleScript and returns a table')
     end)
     sacrificialEvent:Fire()
-    wait(2)
+    Logger:waitForFlush()
+    script.Parent = nil
+    script:Destroy()
     return
   end
 
@@ -103,7 +139,9 @@ function runScript(src)
       error('your script is missing a `Main` method - please define it')
     end)
     sacrificialEvent:Fire()
-    wait(2)
+    Logger:waitForFlush()
+    script.Parent = nil
+    script:Destroy()
     return
   end
 
@@ -116,39 +154,48 @@ function runScript(src)
   script:Destroy()
 end
 
-while true do
-  local success, e = pingCoordinator()
-  if not success then
-    warn('backend server is no longer alive - exiting main loop')
-    warn(`got error {e}`)
-    -- discard all logging messages, we can't reach the coordinator
-    Logger.queuedMessages = {}
-    Logger.tryFlush = false
-    wait(2)
-    cleanup()
-    return
-  end
-
-  local events = getEvents()
-  if not events then 
-    wait(2)
-    cleanup()
-    return
-  end
-
-  for _, v in ipairs(events) do
-    if v.RunScript then
-      runScript(v.RunScript.script)
-      if v.RunScript.oneshot then
-        wait(2)
-        cleanup()
-        return
+task.spawn(function()
+  while true do
+    local success, e = pingCoordinator()
+    if not success then
+      warn('backend server is no longer alive - reinitializing')
+      Logger.tryFlush = false
+      Logger.sendMessages = false
+      while true do
+        local success = reinit()
+        if success then
+          break
+        end
       end
     end
-    -- print(v)
+
+    local events = getEvents()
+    if not events then 
+      warn("could not get events")
+      Logger:waitForFlush()
+      cleanup()
+      return
+    end
+
+    if #events ~= 0 then
+      for _, v in ipairs(events) do
+        if v.RunScript then
+          runScript(v.RunScript.script)
+          if v.RunScript.oneshot then
+            Logger:waitForFlush()
+            cleanup()
+            return
+          end
+        end
+        if v == "Deregister" then
+          Logger:waitForFlush()
+          cleanup()
+          SERVER_ID = HttpService:GenerateGUID(false)
+          Logger.serverId = SERVER_ID
+        end
+      end
+    end
+    wait(1)
   end
-  wait(1)
-end
-
-
+end)
 

@@ -60,6 +60,7 @@ pub enum OutputLevel {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum RobloxEvent {
     RunScript { script: String, oneshot: bool },
+    Deregister,
 }
 
 #[derive(Debug, Clone)]

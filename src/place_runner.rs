@@ -134,15 +134,24 @@ impl PlaceRunner {
                     match msg {
                         Message::Start { server } => {
                             info!("studio server {server:} started");
+                            // 
                             api_svc
                                 .queue_event(
-                                    server,
+                                    server.clone(),
                                     message_receiver::RobloxEvent::RunScript {
                                         script: self.script.clone(),
-                                        oneshot: self.oneshot
+                                        oneshot: self.oneshot && !self.no_launch
                                     },
                                 )
                                 .await;
+                            // By default, if "oneshot" and "no_launch" mode is specified,
+                            // we don't have control over the Studio executable's lifecycle,
+                            // so we'll send a "Deregister" message to Studio so that this application
+                            // can exit cleanly, allowing you to re-run it again in a sort-of-"watch mode".
+                            if self.oneshot && self.no_launch {
+                                api_svc
+                                    .queue_event(server.clone(), message_receiver::RobloxEvent::Deregister).await;
+                            }
                         }
                         Message::Stop { server } => {
                             info!("studio server {server:} stopped");
