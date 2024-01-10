@@ -110,7 +110,7 @@ impl PlaceRunner {
                     "-creatorType".to_string(),
                     format!("{:}", self.creator_type.unwrap()),
                     "-numtestserverplayersuponstartup".to_string(),
-                    "0".to_string(),
+                    "1".to_string(),
                 ]
             }
         };

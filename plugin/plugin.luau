@@ -182,8 +182,9 @@ task.spawn(function()
         if v.RunScript then
           runScript(v.RunScript.script)
           if v.RunScript.oneshot then
+            wait(2)
             Logger:waitForFlush()
-            cleanup()
+            -- cleanup()
             return
           end
         end
