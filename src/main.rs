@@ -48,8 +48,11 @@ struct RunOptions {
     #[arg(short, long)]
     oneshot: bool,
 
-    #[arg(short, long)]
+    #[arg(long)]
     no_launch: bool,
+
+    #[arg(long)]
+    no_exit: bool,
 
     #[arg(short, long)]
     team_test: bool,
@@ -66,6 +69,7 @@ async fn run(options: RunOptions) -> Result<i32> {
         team_test,
         creator_id,
         creator_type,
+        no_exit
     } = options;
     let mut script = File::open(script)?;
     let mut str = String::default();
@@ -82,6 +86,7 @@ async fn run(options: RunOptions) -> Result<i32> {
         team_test,
         creator_id,
         creator_type,
+        no_exit
     };
 
     let (exit_sender, exit_receiver) = async_channel::unbounded::<()>();

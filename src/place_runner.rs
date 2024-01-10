@@ -11,10 +11,13 @@ use roblox_install::RobloxStudio;
 use crate::message_receiver::{self, Message, RobloxMessage};
 
 /// A wrapper for `process::Child` that force-kills the process on drop.
-struct KillOnDrop(process::Child);
+struct KillOnDrop(process::Child, bool);
 
 impl Drop for KillOnDrop {
     fn drop(&mut self) {
+        if self.1 {
+            return;
+        }
         let _ignored = self.0.kill();
     }
 }
@@ -30,6 +33,7 @@ pub struct PlaceRunner {
     pub no_launch: bool,
     pub oneshot: bool,
     pub team_test: bool,
+    pub no_exit: bool,
 }
 
 impl PlaceRunner {
@@ -125,6 +129,7 @@ impl PlaceRunner {
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .spawn()?,
+                self.no_exit,
             ))
         };
 
@@ -134,13 +139,13 @@ impl PlaceRunner {
                     match msg {
                         Message::Start { server } => {
                             info!("studio server {server:} started");
-                            // 
+                            //
                             api_svc
                                 .queue_event(
                                     server.clone(),
                                     message_receiver::RobloxEvent::RunScript {
                                         script: self.script.clone(),
-                                        oneshot: self.oneshot && !self.no_launch
+                                        oneshot: self.oneshot
                                     },
                                 )
                                 .await;
@@ -148,10 +153,10 @@ impl PlaceRunner {
                             // we don't have control over the Studio executable's lifecycle,
                             // so we'll send a "Deregister" message to Studio so that this application
                             // can exit cleanly, allowing you to re-run it again in a sort-of-"watch mode".
-                            if self.oneshot && self.no_launch {
-                                api_svc
-                                    .queue_event(server.clone(), message_receiver::RobloxEvent::Deregister).await;
-                            }
+                            // if self.oneshot && self.no_launch {
+                            //     api_svc
+                            //         .queue_event(server.clone(), message_receiver::RobloxEvent::Deregister).await;
+                            // }
                         }
                         Message::Stop { server } => {
                             info!("studio server {server:} stopped");
