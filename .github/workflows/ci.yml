@@ -35,7 +35,9 @@ jobs:
       run: aftman install
     - name: Build run-in-roblox plugin
       run: cd plugin && lune build.lua
+    - name: Build test place
+      run: cd demo && rojo build default.project.json -o test.rbxl
     - name: Build
-      run: cargo build --locked --verbose
+      run: cargo build --locked
     - name: Run example script
-      run: cargo run -- run --script ./demo/hello.lua --universe-id 28220420 --place-id 95206881 --oneshot
+      run: cargo run -- run --place-file ./demo/test.rbxl --script ./demo/hello.lua --universe-id 28220420 --place-id 95206881 --oneshot
