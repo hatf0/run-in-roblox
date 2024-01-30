@@ -1,5 +1,6 @@
 #![allow(clippy::redundant_pub_crate)]
 #![allow(clippy::items_after_statements)]
+#![allow(clippy::struct_excessive_bools)]
 mod message_receiver;
 mod place_runner;
 
@@ -27,66 +28,68 @@ enum Cli {
 #[command(author, version, about, long_about = None)]
 struct RunOptions {
     /// The script file to run
-    #[arg(short, long)]
+    #[arg(short, long, required(true))]
     script: String,
 
-    #[arg(long)]
+    /// The path to a place file to run (unless using team test)
+    #[arg(long, required_unless_present("team_test"))]
     place_file: Option<String>,
 
-    #[arg(long)]
+    /// The universe ID of the place file
+    #[arg(long, required(true))]
     universe_id: Option<u64>,
 
-    #[arg(long)]
+    /// The place ID of the place file
+    #[arg(long, required(true))]
     place_id: Option<u64>,
 
-    #[arg(long)]
+    /// The creator ID of the universe / place
+    #[arg(long, required_unless_present("team_test"))]
     creator_id: Option<u64>,
 
-    #[arg(long)]
+    /// The creator type of the universe / place (usually 0 for an individual, 1 for a group)
+    #[arg(long, required_unless_present("team_test"), default_value("0"))]
     creator_type: Option<u8>,
 
+    /// The number of client instances to launch while opening this place file. You can also run scripts on these clients.
+    #[arg(long, default_value("0"))]
+    num_clients: u8,
+
+    /// Should this program exit after the first instance disconnects / times out?
     #[arg(short, long)]
     oneshot: bool,
 
+    /// Use this flag if the lifecycle of Roblox Studio is managed by you. Note that you will need to restart Roblox Studio for the plugin to be installed.
     #[arg(long)]
     no_launch: bool,
 
+    /// Use this flag if you want to keep the Roblox Studio instance around after this program exits. This is typically used with --no_launch to do repeat testing.
     #[arg(long)]
     no_exit: bool,
 
+    /// Use this flag if you want to open an existing place published by a group. This is still experimental and has not been tested.
     #[arg(short, long)]
     team_test: bool,
 }
 
 async fn run(options: RunOptions) -> Result<i32> {
-    let RunOptions {
-        script,
-        universe_id,
-        place_id,
-        place_file,
-        oneshot,
-        no_launch,
-        team_test,
-        creator_id,
-        creator_type,
-        no_exit,
-    } = options;
-    let mut script = File::open(script)?;
+    let mut script = File::open(options.script)?;
     let mut str = String::default();
     script.read_to_string(&mut str)?;
 
     let place_runner = PlaceRunner {
         port: 7777,
         script: str,
-        universe_id,
-        place_file,
-        place_id,
-        oneshot,
-        no_launch,
-        team_test,
-        creator_id,
-        creator_type,
-        no_exit,
+        universe_id: options.universe_id,
+        place_file: options.place_file,
+        place_id: options.place_id,
+        oneshot: options.oneshot,
+        no_launch: options.no_launch,
+        team_test: options.team_test,
+        creator_id: options.creator_id,
+        creator_type: options.creator_type,
+        no_exit: options.no_exit,
+        num_clients: options.num_clients,
     };
 
     let (exit_sender, exit_receiver) = async_channel::unbounded::<()>();

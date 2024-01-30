@@ -30,6 +30,7 @@ pub struct PlaceRunner {
     pub place_id: Option<u64>,
     pub creator_id: Option<u64>,
     pub creator_type: Option<u8>,
+    pub num_clients: u8,
     pub no_launch: bool,
     pub oneshot: bool,
     pub team_test: bool,
@@ -110,7 +111,7 @@ impl PlaceRunner {
                     "-creatorType".to_string(),
                     format!("{:}", self.creator_type.unwrap()),
                     "-numtestserverplayersuponstartup".to_string(),
-                    "1".to_string(),
+                    format!("{:}", self.num_clients),
                 ]
             }
         };
