@@ -40,4 +40,4 @@ jobs:
     - name: Build
       run: cargo build --locked
     - name: Run example script
-      run: cargo run -- run --place-file ./demo/test.rbxl --script ./demo/hello.lua --universe-id 28220420 --place-id 95206881 --oneshot
+      run: cargo run -- run --place-file ./demo/test.rbxl --script ./demo/hello.lua --universe-id 28220420 --place-id 95206881 --creator-id 5137677267 --creator-type 0 --oneshot
