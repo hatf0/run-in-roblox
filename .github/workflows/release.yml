@@ -5,62 +5,55 @@ on:
     tags: ["*"]
 
 jobs:
-  windows:
-    runs-on: windows-latest
-
+  build-cross:
+    name: Build and release (${{ matrix.build }}/${{ matrix.target}})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - build: macos
+            runner: macos-latest
+            target: x86_64-apple-darwin
+          - build: windows-gnu
+            runner: windows-latest
+            target: x86_64-pc-windows-gnu
     steps:
     - uses: actions/checkout@v1
       with:
         submodules: true
-
-    - name: Build release binary
-      run: cargo build --verbose --locked --release
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v1
+    - name: Setup Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
       with:
-        name: run-in-roblox-win64
-        path: target/release/run-in-roblox.exe
-
-  macos:
-    runs-on: macos-latest
-
-    steps:
-    - uses: actions/checkout@v1
-      with:
-        submodules: true
-
-    - name: Install Rust
-      run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-
-    - name: Build release binary
-      run: |
-        source $HOME/.cargo/env
-        cargo build --verbose --locked --release
-      env:
-        OPENSSL_STATIC: 1
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v1
-      with:
-        name: run-in-roblox-macos
-        path: target/release/run-in-roblox
-
-  linux:
-    runs-on: ubuntu-latest
-
-    steps:
-    - uses: actions/checkout@v1
-      with:
-        submodules: true
-
+        targets: ${{ matrix.target }}
+    - name: Get version from Git tag
+      shell: bash
+      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
     - name: Build
-      run: cargo build --locked --verbose --release
-      env:
-        OPENSSL_STATIC: 1
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v1
+      uses: actions-rs/cargo@v1
       with:
-        name: run-in-roblox-linux
-        path: target/release/run-in-roblox
+        use-cross: true
+        command: build
+        args: --verbose --release --target ${{ matrix.target }}
+    - name: Build archive
+      shell: bash
+      run: |
+        dirname="run-in-roblox-${{ env.VERSION }}-${{ matrix.target }}"
+        mkdir "$dirname"
+        if [ "${{ matrix.build }}" = "windows-gnu" ]; then
+          mv "target/${{ matrix.target }}/release/run-in-roblox.exe" "$dirname"
+        else
+          mv "target/${{ matrix.target }}/release/run-in-roblox" "$dirname"
+        fi
+
+        if [ "${{ matrix.build }}" = "windows-gnu" ]; then
+          7z a "$dirname.zip" "$dirname"
+          echo "ASSET=$dirname.zip" >> $GITHUB_ENV
+        else
+          tar -czf "$dirname.tar.gz" "$dirname"
+          echo "ASSET=$dirname.tar.gz" >> $GITHUB_ENV
+        fi
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          ${{ env.ASSET }}
