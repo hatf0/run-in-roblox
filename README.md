@@ -1,2 +1,2 @@
 # run-in-roblox
-This repository has been discontinued. Sorry.
+Please visit [azul-rbx/run-in-roblox](https://github.com/azul-rbx/run-in-roblox) for any future development.
